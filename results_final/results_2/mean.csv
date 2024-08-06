@@ -1,0 +1,11 @@
+Data,DNABERT-2,NT-v2,HyenaDNA
+B_amyloliquefaciens,0.851,0.826,0.862
+R_capsulatus,0.687,0.676,0.712
+Arabidopsis_NonTATA,0.946,0.939,0.955
+Arabidopsis_TATA,0.951,0.951,0.961
+human_worm,0.98,0.978,0.95
+mouse_0,0.709,0.697,0.637
+mouse_1,0.902,0.896,0.886
+mouse_2,0.922,0.904,0.878
+mouse_3,0.786,0.652,0.587
+mouse_4,0.687,0.682,0.642

@@ -1,0 +1,6 @@
+Data,DNABERT-2,NT-v2,HyenaDNA
+all,0.515,0.471,0.485
+multi,0.712,0.725,0.71
+reconstructed,0.608,0.607,0.607
+covid,0.446,0.43,0.449
+regulatory,0.63,0.555,0.702
