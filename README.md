@@ -7,7 +7,9 @@ Please cite the following manuscript for using DNAm models built and association
 > Feng, H., Wei, P., Wu, C., 2024. Benchmarking DNA Foundation Models for Genomic Sequence Classification. Under Review.
 
 ## Workflow
-<img src="https://github.com/ChongWuLab/dna_foundation_benchmark/blob/main/Fig1.png" width=50% height=50%>
+<div style="text-align: center;">
+  <img src="https://github.com/ChongWuLab/dna_foundation_benchmark/blob/main/Fig1.png" width=50% height=50%>
+</div>
 
 ## Genetic data processing
 
