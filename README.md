@@ -1,6 +1,16 @@
-# Benchmarking DNA Foundation Models for Genomic Sequence Classification
-
+# DNA Foundation Models Benchmarking
+## Introduction
 This repo is for generating the results of DNA foundation models benchmarking.
+
+Please cite the following manuscript for using DNAm models built and association results by our work:  
+
+> Feng, H., Wei, P., Wu, C., 2024. Benchmarking DNA Foundation Models for Genomic Sequence Classification. Under Review.
+
+## Workflow
+
+## Genetic data processing
+
+## References
 
 After running scripts in `./job_scripts`, there should be folders in `/results_final` named dnabert2, dnabert2_meanpool, ntv2, ntv2_meanpool, hyena, hyena_meanpool, each storing the performance of all 56 datasets.
 
