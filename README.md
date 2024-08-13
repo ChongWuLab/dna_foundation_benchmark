@@ -24,9 +24,9 @@ The scripts `job_scripts/classify_dnabert2.py`, `job_scripts/classify_ntv2.py`, 
 `job_scripts/delong.py` is used to compare the AUC of each model on each dataset.
 
 ## Organized results and figures
-`results_final/process.py`: Generate the tables to compare (1) model performances on 4 categories of tasks, (2) model performances on multiclass classification tasks, (3) model performances with summary token pooling and mean pooling.
-`results_final/plot_radar.py`: Generate the radar plot Supplementary figure 1.
-`results_final/plot_box.py`: Generate the boxplots of summary token pooling versus mean pooling.
+`results_final/process.py`: Generate the tables to compare (1) model performances on 4 categories of tasks, (2) model performances on multiclass classification tasks, (3) model performances with summary token pooling and mean pooling.\
+`results_final/plot_radar.py`: Generate the radar plot Supplementary figure 1.\
+`results_final/plot_box.py`: Generate the boxplots of summary token pooling versus mean pooling.\
 `results_final/plot_runtime.py`: Generate the runtime plot.
 
 ## References
