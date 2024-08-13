@@ -1,4 +1,4 @@
-#Benchmarking DNA Foundation Models for Genomic Sequence Classification
+# Benchmarking DNA Foundation Models for Genomic Sequence Classification
 
 This repo is for generating the results of DNA foundation models benchmarking.
 
