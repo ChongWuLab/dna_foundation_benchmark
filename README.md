@@ -4,7 +4,7 @@ This repo is for generating the results of DNA foundation models benchmarking.
 
 Please cite the following manuscript for using DNAm models built and association results by our work:  
 
-> Feng, H., Wei, P., Wu, C., 2024. Benchmarking DNA Foundation Models for Genomic Sequence Classification. Under Review.
+> Feng, H., et. al., Wei, P., Wu, C., 2024. Benchmarking DNA Foundation Models for Genomic Sequence Classification. Under Review.
 
 ## Workflow
 <p align="center">
