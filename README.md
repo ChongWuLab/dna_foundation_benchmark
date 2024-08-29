@@ -15,7 +15,7 @@ Please cite the following manuscript for using DNAm models built and association
 </p>
 
 ## Genomic data processing
-We collected the preprocessed datasets of genomic tasks from published works with DNA sequences and corresponding labels. We further processed these datasets for train-test split, and the processed datasets can be downloaded **here**. We maintained the training and testing split of datasets from their original works if available; otherwise, we randomly split the samples into a ratio of 7:3 for training and testing. Detailed descriptions of each dataset can be found in our supplementary materials **Dataset naming** section.
+We collected the preprocessed datasets of genomic tasks from published works with DNA sequences and corresponding labels. We further processed these datasets for train-test split, and the processed datasets can be downloaded [here](https://osf.io/fusgr/files/osfstorage). We maintained the training and testing split of datasets from their original works if available; otherwise, we randomly split the samples into a ratio of 7:3 for training and testing. Detailed descriptions of each dataset can be found in our supplementary materials **Dataset naming** section.
 
 ## Zero-shot embedding generation
 After running scripts `job_scripts/inference_dnabert2.py`, `job_scripts/inference_ntv2.py`, `job_scripts/inference_hyena.py`, with arguments specifying name of dataset folder, output pooling method and maximum sequence length, csv files will be generated containing the zero-shot embeddings of sequences for training and testing data.
