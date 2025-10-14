@@ -34,14 +34,12 @@ def process_file(file_path, foundation_name):
     df_long['Foundation'] = foundation_name
     return df_long
 
-# Process each CSV file and label with its foundation model name.
+
 df_cadph    = process_file('../results_final/cadph_across_pooling.csv',    'CADPH')
 df_dnabert2 = process_file('../results_final/dnabert2_across_pooling.csv', 'DNABERT2')
 df_grover   = process_file('../results_final/grover_across_pooling.csv',   'GROVER')
 df_hyena    = process_file('../results_final/hyena_across_pooling.csv',    'HYENA')
 df_ntv2     = process_file('../results_final/ntv2_across_pooling.csv',     'NTv2')
-
-# Combine the processed data from all models.
 combined_df = pd.concat([df_cadph, df_dnabert2, df_grover, df_hyena, df_ntv2], ignore_index=True)
 
 foundation_order = ['CADPH', 'DNABERT2', 'GROVER', 'HYENA', 'NTv2']
@@ -92,13 +90,11 @@ ax.set_xlabel('Foundation Model', fontsize=14)
 ax.set_ylabel('AUC', fontsize=14)
 ax.set_title('AUC Distributions by Foundation Model and Pooling Method', fontsize=16, fontweight='bold')
 
-# Use a custom color palette for pooling methods.
 colors = ['#4c72b0', '#dd8452', '#55a868'][:len(pooling_order)]
 for idx, box in enumerate(bp['boxes']):
     pooling_idx = idx % len(pooling_order)
     box.set_facecolor(colors[pooling_idx])
 
-# Create a legend for the pooling methods.
 legend_handles = [mpatches.Patch(color=color, label=pooling)
                   for color, pooling in zip(colors, pooling_order)]
 ax.legend(handles=legend_handles, title='Pooling Method', fontsize=12, title_fontsize=12)

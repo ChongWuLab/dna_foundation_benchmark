@@ -11,12 +11,12 @@ from transformers import AutoTokenizer, AutoModel
 # Configuration
 
 project_dir = ".."
-input_csv_path = f"{project_dir}/data_processed/pathogenic/seqs_pathogenic_medium.csv"
+input_csv_path = f"{project_dir}/data_processed/pathogenic/seqs_pathogenic_short.csv"
 output_dir = f"{project_dir}/data_processed/pathogenic"
 
 checkpoint = "Path/to/the/downloaded/model/checkpoint"
-INPUT_SEQUENCE_LENGTH = 6000
-MAX_LENGTH = INPUT_SEQUENCE_LENGTH + 1
+INPUT_SEQUENCE_LENGTH = 2048
+MAX_LENGTH = 512
 BATCH_SIZE = 128
 
 
@@ -28,17 +28,17 @@ def mean_pooling(hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> t
     embed = torch.sum(hidden_states * attention_mask, dim=1) / torch.sum(attention_mask, dim=1)
     return embed
 
-def get_hyena_embedding(seq_list, tokenizer, model, max_length):
-    """Embed sequences with a single forward pass using the HyenaDNA model."""
+def get_grover_embedding(seq_list, tokenizer, model, max_length):
+    """Embed sequences with a single forward pass using the GROVER model."""
     tok = tokenizer(seq_list, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
+    
     device = model.device
     tok = {k: v.to(device) for k, v in tok.items()}
     
     with torch.no_grad():
-        attn_mask = (tok["input_ids"] != tokenizer.pad_token_id).int()
-        hidden_states = model(tok["input_ids"])[0]
-    
-    embedding = mean_pooling(hidden_states, attn_mask)
+        hidden_states = model(tok["input_ids"], attention_mask=tok["attention_mask"])[0]
+
+    embedding = mean_pooling(hidden_states, tok["attention_mask"])
     return embedding
 
 
@@ -100,56 +100,50 @@ def collate_fn(batch_list):
 
 
 
-
 if __name__ == "__main__":
-    print("Loading HyenaDNA tokenizer and model...")
+    print("Loading GROVER tokenizer and model...")
     tokenizer = AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=True, local_files_only=True)
-    model = AutoModel.from_pretrained(checkpoint, trust_remote_code=True, local_files_only=True, device_map="auto")
+    model = AutoModel.from_pretrained(checkpoint, trust_remote_code=True, local_files_only=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
     model.eval()
-    print("Model loaded successfully.")
+    print(f"Model loaded successfully on {device}.")
 
     print(f"\nLoading data from {input_csv_path}...")
     full_df = pd.read_csv(input_csv_path)
+    print(f"Loaded {len(full_df)} total variants.")
 
     df_pathogenic = full_df[full_df['class'] == 1].copy()
     df_common = full_df[full_df['class'] == 0].copy()
     print(f"Pathogenic (class 1): {len(df_pathogenic)} variants")
     print(f"Common (class 0): {len(df_common)} variants")
 
-    datasets_to_process = {
-        'pathogenic': df_pathogenic,
-        'common': df_common
-    }
+    datasets_to_process = {'pathogenic': df_pathogenic, 'common': df_common}
 
     for group_name, df_group in datasets_to_process.items():
         print(f"PROCESSING GROUP: {group_name.upper()}")
-
+            
         dataset = SequenceDataset(df_group)
-        loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn, num_workers=4)
+        loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
         
         all_embeds_ref, all_embeds_alt = [], []
         with torch.no_grad():
             for i, batch in enumerate(loader):
                 print(f"Processing batch {i+1}/{len(loader)} for group '{group_name}'...")
                 
-                embed_ref = get_hyena_embedding(batch["ref_seq"], tokenizer, model, MAX_LENGTH)
-                embed_alt = get_hyena_embedding(batch["alt_seq"], tokenizer, model, MAX_LENGTH)
+                embed_ref = get_grover_embedding(batch["ref_seq"], tokenizer, model, MAX_LENGTH)
+                embed_alt = get_grover_embedding(batch["alt_seq"], tokenizer, model, MAX_LENGTH)
                 
                 all_embeds_ref.append(embed_ref.cpu())
                 all_embeds_alt.append(embed_alt.cpu())
 
                 if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    gc.collect()
-
-        if not all_embeds_ref: 
-            print(f"No embeddings generated for group '{group_name}', skipping.")
-            continue
+                    torch.cuda.empty_cache(); gc.collect()
             
         full_embeds_ref = torch.cat(all_embeds_ref, dim=0)
         full_embeds_alt = torch.cat(all_embeds_alt, dim=0)
         
-
+        # Select the metadata columns to be saved from the group's dataframe.
         metadata_to_save = df_group[['chromosome', 'pos', 'ref', 'alt']]
 
         calculate_and_save_metrics(
@@ -157,8 +151,8 @@ if __name__ == "__main__":
             vectors2=full_embeds_alt,
             metadata_df=metadata_to_save,
             output_path=output_dir,
-            prefix="hyena",
+            prefix="grover",
             group_name=group_name
         )
-    
+
     print("\nAll processing complete!")

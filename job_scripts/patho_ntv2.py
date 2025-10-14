@@ -1,222 +1,172 @@
 import pandas as pd
 import torch
 import gc
+import os
+import sys
+import numpy as np
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer, AutoModelForMaskedLM
-import torch.nn.functional as F
 
+
+# Configuration
 
 project_dir = ".."
-csv_path = f"{project_dir}/data_processed/pathogenic/sequences_pathogenic.csv"
-checkpoint  = "Path/to/the/downloaded/model/checkpoint"
-max_length  = 1000
-batch_size  = 32
-output_csv  = f"{project_dir}/results_final/ntv2_meanpool/pathogenic.csv"
+input_csv_path = f"{project_dir}/data_processed/pathogenic/seqs_pathogenic_medium.csv"
+output_dir = f"{project_dir}/data_processed/pathogenic"
+
+checkpoint = "Path/to/the/downloaded/model/checkpoint"
+INPUT_SEQUENCE_LENGTH = 6000
+MAX_LENGTH = 1000
+BATCH_SIZE = 32
 
 
-df = pd.read_csv(csv_path)
-print(f"Loaded {df.shape[0]} rows from {csv_path}")
+# Helper Functions
+
+def mean_pooling(hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    """Mean pool hidden states using an attention mask."""
+    attention_mask = attention_mask.unsqueeze(-1)
+    embed = torch.sum(hidden_states * attention_mask, dim=1) / torch.sum(attention_mask, dim=1)
+    return embed
+
+def get_nt_embedding(seq_list, tokenizer, model, max_length):
+    """Embed sequences with a single forward pass using the NT-v2 model."""
+    tok = tokenizer(seq_list, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
+    
+    device = model.device
+    tok = {k: v.to(device) for k, v in tok.items()}
+    attn_mask = tok["attention_mask"]
+    
+    with torch.no_grad():
+        hidden_states = model(
+            tok["input_ids"],
+            attention_mask=attn_mask,
+            encoder_attention_mask=attn_mask,
+            output_hidden_states=True
+        )["hidden_states"][-1]
+
+    embedding = mean_pooling(hidden_states, attn_mask)
+    return embedding
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def calculate_and_save_metrics(vectors1, vectors2, metadata_df, output_path, prefix, group_name):
+    """
+    Calculates metrics and saves them to CSV, including metadata in the output.
+    """
+    print(f"Calculating and saving metrics for prefix: {prefix}, group: {group_name}")
+    os.makedirs(output_path, exist_ok=True)
+    metadata_df = metadata_df.reset_index(drop=True)
 
-tokenizer = AutoTokenizer.from_pretrained(
-    checkpoint,
-    trust_remote_code=True,
-    local_files_only=True
-)
+    v1 = vectors1.cpu().numpy()
+    v2 = vectors2.cpu().numpy()
+    differences = v2 - v1
+    l1 = np.sum(np.abs(differences), axis=1)
+    l2 = np.linalg.norm(differences, axis=1)
+    norm1 = np.linalg.norm(v1, axis=1)
+    norm2 = np.linalg.norm(v2, axis=1)
+    dot_product = np.sum(v1 * v2, axis=1)
+    cosine_sim = np.divide(dot_product, norm1 * norm2, out=np.zeros_like(dot_product, dtype=float), where=(norm1 * norm2) != 0)
 
-model = AutoModelForMaskedLM.from_pretrained(
-    checkpoint,
-    trust_remote_code=True,
-    local_files_only=True
-)
+    diff_df = pd.DataFrame(differences)
+    # Concatenate side-by-side: [embedding_diff_0, ..., embedding_diff_N, chromosome, pos, ref, alt]
+    output_diff_df = pd.concat([diff_df, metadata_df], axis=1)
+    output_diff_df.to_csv(f"{output_path}/{prefix}_differences_{group_name}.csv", index=False, header=False)
 
-model.to(device)
-model.eval()
+    l1_output_df = metadata_df.copy()
+    l1_output_df.insert(0, 'L1_distance', l1)
+    l1_output_df.to_csv(f"{output_path}/{prefix}_L1_{group_name}.csv", index=False, header=True)
+
+    l2_output_df = metadata_df.copy()
+    l2_output_df.insert(0, 'L2_distance', l2)
+    l2_output_df.to_csv(f"{output_path}/{prefix}_L2_{group_name}.csv", index=False, header=True)
+    
+    cosine_output_df = metadata_df.copy()
+    cosine_output_df.insert(0, 'cosine_similarity', cosine_sim)
+    cosine_output_df.to_csv(f"{output_path}/{prefix}_cosine_{group_name}.csv", index=False, header=True)
+
+    print(f"Saved results to {output_path} with prefix '{prefix}' for group '{group_name}'")
 
 
-class PathogenicDataset(Dataset):
+# Dataset and Collation
+
+class SequenceDataset(Dataset):
     def __init__(self, df):
         super().__init__()
-        df["ref_seq"] = df["ref_seq"].str.upper()
-        df["alt_seq"] = df["alt_seq"].str.upper()
+        df["ref_seq"] = df["ref_seq"].astype(str)
+        df["alt_seq"] = df["alt_seq"].astype(str)
         self.df = df.reset_index(drop=True)
     
     def __len__(self):
         return len(self.df)
     
     def __getitem__(self, idx):
-        row = self.df.iloc[idx]
-        return {
-            "ref_seq":  row["ref_seq"],
-            "alt_seq":  row["alt_seq"],
-            "class":    row["class"],
-            "chromosome": row["chromosome"],
-            "ref":      row["ref"],
-            "pos":      row["pos"],
-            "alt":      row["alt"],
-            "MAF":      row["MAF"] if "MAF" in self.df.columns else None,
-            "split":    row["split"],
-            "label":    row["label"]
-        }
+        return self.df.iloc[idx].to_dict()
 
-def collate_fn(batch):
-    ref_list  = [item["ref_seq"] for item in batch]
-    alt_list  = [item["alt_seq"] for item in batch]
-    class_list= [item["class"]   for item in batch]
-    chrom_list= [item["chromosome"] for item in batch]
-    ref_allele= [item["ref"]     for item in batch]
-    pos_list  = [item["pos"]     for item in batch]
-    alt_allele= [item["alt"]     for item in batch]
-    maf_list  = [item["MAF"]     for item in batch]
-    split_list= [item["split"]   for item in batch]
-    label_list= [item["label"]   for item in batch]
-    
-    return {
-        "ref_seq":   ref_list,
-        "alt_seq":   alt_list,
-        "class":     class_list,
-        "chromosome": chrom_list,
-        "ref":       ref_allele,
-        "pos":       pos_list,
-        "alt":       alt_allele,
-        "MAF":       maf_list,
-        "split":     split_list,
-        "label":     label_list
+def collate_fn(batch_list):
+    return {key: [item[key] for item in batch_list] for key in batch_list[0]}
+
+
+
+if __name__ == "__main__":
+    print("Loading Nucleotide Transformer v2 (500M) tokenizer and model...")
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=True, local_files_only=True)
+    model = AutoModelForMaskedLM.from_pretrained(checkpoint, trust_remote_code=True, local_files_only=True, device_map="auto")
+    model.eval()
+    print("Model loaded successfully.")
+
+    print(f"\nLoading data from {input_csv_path}...")
+    full_df = pd.read_csv(input_csv_path)
+    print(f"Loaded {len(full_df)} total variants.")
+
+    df_pathogenic = full_df[full_df['class'] == 1].copy()
+    df_common = full_df[full_df['class'] == 0].copy()
+    print(f"Pathogenic (class 1): {len(df_pathogenic)} variants")
+    print(f"Common (class 0): {len(df_common)} variants")
+
+    datasets_to_process = {
+        'pathogenic': df_pathogenic, 
+        'common': df_common
     }
 
-dataset = PathogenicDataset(df)
-loader  = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-
-
-def mean_pooling(hidden_states, attention_mask):
-    """
-    hidden_states shape: [B, seq_len, hidden_dim]
-    attention_mask shape: [B, seq_len]
-    Returns [B, hidden_dim]
-    """
-    attention_mask = attention_mask.unsqueeze(-1)  # [B, seq_len, 1]
-    embed = torch.sum(hidden_states * attention_mask, dim=1) / torch.sum(attention_mask, dim=1)
-    return embed
-
-
-def l1_norm(e_ref, e_alt):
-    # shape [B]
-    return torch.norm(e_ref - e_alt, p=1, dim=1)
-
-def l2_norm(e_ref, e_alt):
-    return torch.norm(e_ref - e_alt, p=2, dim=1)
-
-def cosine_similarity(e_ref, e_alt):
-    # F.cosine_similarity => shape [B]
-    return F.cosine_similarity(e_ref, e_alt, dim=1)
-
-def dot_product(e_ref, e_alt):
-    # sum(e_ref * e_alt) => shape [B]
-    return torch.sum(e_ref * e_alt, dim=1)
-
-
-results = {
-    "L1": [],
-    "L2": [],
-    "cos": [],
-    "dot": [],
-    "class": [],
-    "chromosome": [],
-    "ref": [],
-    "pos": [],
-    "alt": [],
-    "MAF": [],
-    "split": [],
-    "label": []
-}
-
-with torch.no_grad():
-    for batch in loader:
-        tok_ref = tokenizer(
-            batch["ref_seq"],
-            padding='max_length',
-            truncation=True,
-            max_length=max_length,
-            return_tensors='pt'
-        )
-        tok_ref = {k: v.to(device) for k, v in tok_ref.items()}
-        attn_ref = tok_ref["attention_mask"]
+    for group_name, df_group in datasets_to_process.items():
+        print(f"PROCESSING GROUP: {group_name.upper()}")
         
-        out_ref = model(
-            tok_ref["input_ids"],
-            attention_mask=attn_ref,
-            encoder_attention_mask=attn_ref,
-            output_hidden_states=True
-        )["hidden_states"][-1]
+        if df_group.empty:
+            print(f"Skipping group '{group_name}' as it contains no data.")
+            continue
 
-        emb_ref = mean_pooling(out_ref, attn_ref)
+        dataset = SequenceDataset(df_group)
+        loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn, num_workers=4)
         
+        all_embeds_ref, all_embeds_alt = [], []
+        with torch.no_grad():
+            for i, batch in enumerate(loader):
+                print(f"Processing batch {i+1}/{len(loader)} for group '{group_name}'...")
+                
+                embed_ref = get_nt_embedding(batch["ref_seq"], tokenizer, model, MAX_LENGTH)
+                embed_alt = get_nt_embedding(batch["alt_seq"], tokenizer, model, MAX_LENGTH)
+                
+                all_embeds_ref.append(embed_ref.cpu())
+                all_embeds_alt.append(embed_alt.cpu())
 
-        tok_alt = tokenizer(
-            batch["alt_seq"],
-            padding='max_length',
-            truncation=True,
-            max_length=max_length,
-            return_tensors='pt'
-        )
-        tok_alt = {k: v.to(device) for k, v in tok_alt.items()}
-        attn_alt = tok_alt["attention_mask"]
-        
-        out_alt = model(
-            tok_alt["input_ids"],
-            attention_mask=attn_alt,
-            encoder_attention_mask=attn_alt,
-            output_hidden_states=True
-        )["hidden_states"][-1]
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache(); gc.collect()
 
-        emb_alt = mean_pooling(out_alt, attn_alt)
-        
-        emb_ref = emb_ref.cpu()
-        emb_alt = emb_alt.cpu()
-        
-
-        l1_vals  = l1_norm(emb_ref, emb_alt).numpy()
-        l2_vals  = l2_norm(emb_ref, emb_alt).numpy()
-        cos_vals = cosine_similarity(emb_ref, emb_alt).numpy()
-        dot_vals = dot_product(emb_ref, emb_alt).numpy()
-        
-
-        for i in range(len(batch["class"])):
-            results["L1"].append(l1_vals[i])
-            results["L2"].append(l2_vals[i])
-            results["cos"].append(cos_vals[i])
-            results["dot"].append(dot_vals[i])
+        if not all_embeds_ref:
+            print(f"No embeddings generated for group '{group_name}', skipping.")
+            continue
             
-            results["class"].append(batch["class"][i])
-            results["chromosome"].append(batch["chromosome"][i])
-            results["ref"].append(batch["ref"][i])
-            results["pos"].append(batch["pos"][i])
-            results["alt"].append(batch["alt"][i])
-            results["MAF"].append(batch["MAF"][i])
-            results["split"].append(batch["split"][i])
-            results["label"].append(batch["label"][i])
+        full_embeds_ref = torch.cat(all_embeds_ref, dim=0)
+        full_embeds_alt = torch.cat(all_embeds_alt, dim=0)
+        
+        metadata_to_save = df_group[['chromosome', 'pos', 'ref', 'alt']]
 
-        del emb_ref, emb_alt, out_ref, out_alt
-        torch.cuda.empty_cache()
-        gc.collect()
-
-
-df_out = pd.DataFrame({
-    "L1":   results["L1"],
-    "L2":   results["L2"],
-    "cos":  results["cos"],
-    "dot":  results["dot"],
-    "class":results["class"],
-    "chromosome": results["chromosome"],
-    "ref":  results["ref"],
-    "pos":  results["pos"],
-    "alt":  results["alt"],
-    "MAF":  results["MAF"],
-    "split":results["split"],
-    "label":results["label"]
-})
-
-df_out.to_csv(output_csv, index=False)
-print(f"Saved => {output_csv} | Shape: {df_out.shape}")
+        calculate_and_save_metrics(
+            vectors1=full_embeds_ref,
+            vectors2=full_embeds_alt,
+            metadata_df=metadata_to_save,
+            output_path=output_dir,
+            prefix="ntv2",
+            group_name=group_name
+        )
+    
+    print("\nAll processing complete!")

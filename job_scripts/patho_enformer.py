@@ -5,41 +5,41 @@ import os
 import sys
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
-from transformers import AutoTokenizer, AutoModel
+from enformer_pytorch import from_pretrained, seq_indices_to_one_hot
 
 
 # Configuration
 
 project_dir = ".."
-input_csv_path = f"{project_dir}/data_processed/pathogenic/seqs_pathogenic_medium.csv"
+input_csv_path = f"{project_dir}/data_processed/pathogenic/seqs_pathogenic_long.csv"
 output_dir = f"{project_dir}/data_processed/pathogenic"
 
 checkpoint = "Path/to/the/downloaded/model/checkpoint"
-INPUT_SEQUENCE_LENGTH = 6000
-MAX_LENGTH = INPUT_SEQUENCE_LENGTH + 1
-BATCH_SIZE = 128
+INPUT_SEQUENCE_LENGTH = 196608
+BATCH_SIZE = 8
 
 
 # Helper Functions
 
-def mean_pooling(hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-    """Mean pool hidden states using an attention mask."""
-    attention_mask = attention_mask.unsqueeze(-1)
-    embed = torch.sum(hidden_states * attention_mask, dim=1) / torch.sum(attention_mask, dim=1)
-    return embed
+def seq_to_indices(seq: str) -> np.ndarray:
+    """Converts a DNA sequence string to a numpy array of indices."""
+    seq_bytes = seq.upper().encode("ascii")
+    arr = np.frombuffer(seq_bytes, dtype=np.uint8)
+    arr = arr - 65
+    lut = np.full(26, 4, dtype=np.int8)
+    for base, idx in zip("ACGT", range(4)):
+        lut[ord(base) - 65] = idx
+    out = np.full(arr.shape, 4, dtype=np.int8)
+    valid = (arr >= 0) & (arr < 26)
+    out[valid] = lut[arr[valid]]
+    return out
 
-def get_hyena_embedding(seq_list, tokenizer, model, max_length):
-    """Embed sequences with a single forward pass using the HyenaDNA model."""
-    tok = tokenizer(seq_list, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
-    device = model.device
-    tok = {k: v.to(device) for k, v in tok.items()}
-    
-    with torch.no_grad():
-        attn_mask = (tok["input_ids"] != tokenizer.pad_token_id).int()
-        hidden_states = model(tok["input_ids"])[0]
-    
-    embedding = mean_pooling(hidden_states, attn_mask)
-    return embedding
+def one_hot_encode_sequences(sequences: list[str], device: torch.device) -> torch.Tensor:
+    """Converts a list of DNA strings to a one-hot encoded tensor on the specified device."""
+    indices_list = [seq_to_indices(s) for s in sequences]
+    indices_tensor = torch.from_numpy(np.stack(indices_list)).long()
+    one_hot_tensor = seq_indices_to_one_hot(indices_tensor).to(device)
+    return one_hot_tensor
 
 
 def calculate_and_save_metrics(vectors1, vectors2, metadata_df, output_path, prefix, group_name):
@@ -80,7 +80,6 @@ def calculate_and_save_metrics(vectors1, vectors2, metadata_df, output_path, pre
     print(f"Saved results to {output_path} with prefix '{prefix}' for group '{group_name}'")
 
 
-# Dataset and Collation
 
 class SequenceDataset(Dataset):
     def __init__(self, df):
@@ -96,26 +95,31 @@ class SequenceDataset(Dataset):
         return self.df.iloc[idx].to_dict()
 
 def collate_fn(batch_list):
+    """Collate function to handle all dataframe columns."""
     return {key: [item[key] for item in batch_list] for key in batch_list[0]}
 
 
 
-
 if __name__ == "__main__":
-    print("Loading HyenaDNA tokenizer and model...")
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=True, local_files_only=True)
-    model = AutoModel.from_pretrained(checkpoint, trust_remote_code=True, local_files_only=True, device_map="auto")
+    print("Loading Enformer model...")
+    device = torch.device("cuda")
+    model = from_pretrained(checkpoint, local_files_only=True)
+    model.to(device)
     model.eval()
-    print("Model loaded successfully.")
+    print(f"Model loaded successfully on {device}.")
 
+    # Load and Split Data
     print(f"\nLoading data from {input_csv_path}...")
     full_df = pd.read_csv(input_csv_path)
+
+    print(f"Loaded {len(full_df)} total variants.")
 
     df_pathogenic = full_df[full_df['class'] == 1].copy()
     df_common = full_df[full_df['class'] == 0].copy()
     print(f"Pathogenic (class 1): {len(df_pathogenic)} variants")
     print(f"Common (class 0): {len(df_common)} variants")
 
+    # Process Each Group
     datasets_to_process = {
         'pathogenic': df_pathogenic,
         'common': df_common
@@ -125,39 +129,57 @@ if __name__ == "__main__":
         print(f"PROCESSING GROUP: {group_name.upper()}")
 
         dataset = SequenceDataset(df_group)
-        loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn, num_workers=4)
+        loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
         
-        all_embeds_ref, all_embeds_alt = [], []
+        all_hidden_ref, all_hidden_alt = [], []
+        all_outputs_ref, all_outputs_alt = [], []
+
         with torch.no_grad():
             for i, batch in enumerate(loader):
                 print(f"Processing batch {i+1}/{len(loader)} for group '{group_name}'...")
                 
-                embed_ref = get_hyena_embedding(batch["ref_seq"], tokenizer, model, MAX_LENGTH)
-                embed_alt = get_hyena_embedding(batch["alt_seq"], tokenizer, model, MAX_LENGTH)
+                ref_one_hot = one_hot_encode_sequences(batch["ref_seq"], device)
+                alt_one_hot = one_hot_encode_sequences(batch["alt_seq"], device)
                 
-                all_embeds_ref.append(embed_ref.cpu())
-                all_embeds_alt.append(embed_alt.cpu())
+                ref_output, ref_hidden = model(ref_one_hot, return_embeddings=True)
+                alt_output, alt_hidden = model(alt_one_hot, return_embeddings=True)
+
+                hidden_vec_ref = ref_hidden.mean(dim=1)
+                hidden_vec_alt = alt_hidden.mean(dim=1)
+                all_hidden_ref.append(hidden_vec_ref.cpu())
+                all_hidden_alt.append(hidden_vec_alt.cpu())
+
+                output_vec_ref = ref_output['human'].mean(dim=1)
+                output_vec_alt = alt_output['human'].mean(dim=1)
+                all_outputs_ref.append(output_vec_ref.cpu())
+                all_outputs_alt.append(output_vec_alt.cpu())
 
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                     gc.collect()
 
-        if not all_embeds_ref: 
-            print(f"No embeddings generated for group '{group_name}', skipping.")
-            continue
-            
-        full_embeds_ref = torch.cat(all_embeds_ref, dim=0)
-        full_embeds_alt = torch.cat(all_embeds_alt, dim=0)
-        
-
+        # Select the metadata columns to be saved from the group's dataframe.
         metadata_to_save = df_group[['chromosome', 'pos', 'ref', 'alt']]
-
+        
+        full_hidden_ref = torch.cat(all_hidden_ref, dim=0)
+        full_hidden_alt = torch.cat(all_hidden_alt, dim=0)
         calculate_and_save_metrics(
-            vectors1=full_embeds_ref,
-            vectors2=full_embeds_alt,
+            vectors1=full_hidden_ref,
+            vectors2=full_hidden_alt,
             metadata_df=metadata_to_save,
             output_path=output_dir,
-            prefix="hyena",
+            prefix="enformer_hidden",
+            group_name=group_name
+        )
+        
+        full_outputs_ref = torch.cat(all_outputs_ref, dim=0)
+        full_outputs_alt = torch.cat(all_outputs_alt, dim=0)
+        calculate_and_save_metrics(
+            vectors1=full_outputs_ref,
+            vectors2=full_outputs_alt,
+            metadata_df=metadata_to_save,
+            output_path=output_dir,
+            prefix="enformer_output",
             group_name=group_name
         )
     

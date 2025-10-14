@@ -5,22 +5,36 @@ import os
 import sys
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoModelForMaskedLM, AutoTokenizer
+import torch.nn.functional as F
 
 
 # Configuration
 
 project_dir = ".."
-input_csv_path = f"{project_dir}/data_processed/pathogenic/seqs_pathogenic_medium.csv"
+input_csv_path = f"{project_dir}/data_processed/pathogenic/seqs_pathogenic_long.csv"
 output_dir = f"{project_dir}/data_processed/pathogenic"
 
 checkpoint = "Path/to/the/downloaded/model/checkpoint"
-INPUT_SEQUENCE_LENGTH = 6000
-MAX_LENGTH = INPUT_SEQUENCE_LENGTH + 1
-BATCH_SIZE = 128
+INPUT_SEQUENCE_LENGTH = 196608
+MAX_LENGTH = 131072
+BATCH_SIZE = 16
 
 
 # Helper Functions
+
+def get_center_sequence(full_sequence: str, target_length: int) -> str:
+    """Extracts the central part of a sequence."""
+    full_len = len(full_sequence)
+    
+    start = (full_len - target_length) // 2
+    end = start + target_length
+    return full_sequence[start:end]
+
+def reverse_complement(sequence: str) -> str:
+    """Reverse complement a DNA sequence."""
+    complement_map = str.maketrans("ACGTN", "TGCAN")
+    return sequence.upper().translate(complement_map)[::-1]
 
 def mean_pooling(hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
     """Mean pool hidden states using an attention mask."""
@@ -28,18 +42,24 @@ def mean_pooling(hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> t
     embed = torch.sum(hidden_states * attention_mask, dim=1) / torch.sum(attention_mask, dim=1)
     return embed
 
-def get_hyena_embedding(seq_list, tokenizer, model, max_length):
-    """Embed sequences with a single forward pass using the HyenaDNA model."""
-    tok = tokenizer(seq_list, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
+def embed_with_rc(seq_list, tokenizer, model, max_length):
+    """Embed sequences by averaging forward and reverse-complement passes."""
+    tok_fwd = tokenizer(seq_list, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
+    rc_list = [reverse_complement(seq) for seq in seq_list]
+    tok_rc = tokenizer(rc_list, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
+    
     device = model.device
-    tok = {k: v.to(device) for k, v in tok.items()}
+    tok_fwd = {k: v.to(device) for k, v in tok_fwd.items()}
+    tok_rc  = {k: v.to(device) for k, v in tok_rc.items()}
     
     with torch.no_grad():
-        attn_mask = (tok["input_ids"] != tokenizer.pad_token_id).int()
-        hidden_states = model(tok["input_ids"])[0]
+        out_fwd = model(tok_fwd["input_ids"], output_hidden_states=True).hidden_states[-1]
+        out_rc  = model(tok_rc["input_ids"],  output_hidden_states=True).hidden_states[-1]
     
-    embedding = mean_pooling(hidden_states, attn_mask)
-    return embedding
+    hidden_avg = (out_fwd + out_rc) / 2.0
+    attn_mask = (tok_fwd["input_ids"] != tokenizer.pad_token_id).int()
+    embed_allele = mean_pooling(hidden_avg, attn_mask)
+    return embed_allele
 
 
 def calculate_and_save_metrics(vectors1, vectors2, metadata_df, output_path, prefix, group_name):
@@ -80,76 +100,83 @@ def calculate_and_save_metrics(vectors1, vectors2, metadata_df, output_path, pre
     print(f"Saved results to {output_path} with prefix '{prefix}' for group '{group_name}'")
 
 
+
 # Dataset and Collation
 
 class SequenceDataset(Dataset):
-    def __init__(self, df):
+    def __init__(self, df, target_length):
         super().__init__()
         df["ref_seq"] = df["ref_seq"].astype(str)
         df["alt_seq"] = df["alt_seq"].astype(str)
         self.df = df.reset_index(drop=True)
+        self.target_length = target_length
     
     def __len__(self):
         return len(self.df)
     
     def __getitem__(self, idx):
-        return self.df.iloc[idx].to_dict()
+        # Get the full-length sequences
+        row_dict = self.df.iloc[idx].to_dict()
+        
+        # Perform center-cropping
+        row_dict["ref_seq"] = get_center_sequence(row_dict["ref_seq"], self.target_length)
+        row_dict["alt_seq"] = get_center_sequence(row_dict["alt_seq"], self.target_length)
+        
+        return row_dict
 
 def collate_fn(batch_list):
     return {key: [item[key] for item in batch_list] for key in batch_list[0]}
 
 
-
+# Main Execution
 
 if __name__ == "__main__":
-    print("Loading HyenaDNA tokenizer and model...")
+    print("Loading Caduceus-Ph tokenizer and model...")
     tokenizer = AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=True, local_files_only=True)
-    model = AutoModel.from_pretrained(checkpoint, trust_remote_code=True, local_files_only=True, device_map="auto")
+    model = AutoModelForMaskedLM.from_pretrained(checkpoint, trust_remote_code=True, local_files_only=True, device_map="auto")
     model.eval()
     print("Model loaded successfully.")
 
+    # Load and Split Data
     print(f"\nLoading data from {input_csv_path}...")
     full_df = pd.read_csv(input_csv_path)
+    print(f"Loaded {len(full_df)} total variants.")
 
     df_pathogenic = full_df[full_df['class'] == 1].copy()
     df_common = full_df[full_df['class'] == 0].copy()
     print(f"Pathogenic (class 1): {len(df_pathogenic)} variants")
     print(f"Common (class 0): {len(df_common)} variants")
 
+    # Process Each Group
     datasets_to_process = {
-        'pathogenic': df_pathogenic,
+        'pathogenic': df_pathogenic, 
         'common': df_common
-    }
+        }
 
     for group_name, df_group in datasets_to_process.items():
         print(f"PROCESSING GROUP: {group_name.upper()}")
 
-        dataset = SequenceDataset(df_group)
+        dataset = SequenceDataset(df_group, target_length=MAX_LENGTH)
         loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn, num_workers=4)
         
         all_embeds_ref, all_embeds_alt = [], []
         with torch.no_grad():
             for i, batch in enumerate(loader):
                 print(f"Processing batch {i+1}/{len(loader)} for group '{group_name}'...")
+
+                embed_ref = embed_with_rc(batch["ref_seq"], tokenizer, model, MAX_LENGTH)
+                embed_alt = embed_with_rc(batch["alt_seq"], tokenizer, model, MAX_LENGTH)
                 
-                embed_ref = get_hyena_embedding(batch["ref_seq"], tokenizer, model, MAX_LENGTH)
-                embed_alt = get_hyena_embedding(batch["alt_seq"], tokenizer, model, MAX_LENGTH)
-                
-                all_embeds_ref.append(embed_ref.cpu())
-                all_embeds_alt.append(embed_alt.cpu())
+                all_embeds_ref.append(embed_ref.cpu()); all_embeds_alt.append(embed_alt.cpu())
 
                 if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    gc.collect()
+                    torch.cuda.empty_cache(); gc.collect()
 
-        if not all_embeds_ref: 
-            print(f"No embeddings generated for group '{group_name}', skipping.")
-            continue
             
         full_embeds_ref = torch.cat(all_embeds_ref, dim=0)
         full_embeds_alt = torch.cat(all_embeds_alt, dim=0)
         
-
+        
         metadata_to_save = df_group[['chromosome', 'pos', 'ref', 'alt']]
 
         calculate_and_save_metrics(
@@ -157,8 +184,8 @@ if __name__ == "__main__":
             vectors2=full_embeds_alt,
             metadata_df=metadata_to_save,
             output_path=output_dir,
-            prefix="hyena",
+            prefix="cadph_long",
             group_name=group_name
         )
-    
-    print("\nAll processing complete!")
+
+    print("All processing complete!")
