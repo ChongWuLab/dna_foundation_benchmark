@@ -155,25 +155,33 @@ To compare the performance of foundation models against a baseline CNN model:
 
 ## 4. Variant Effect Quantification
 
-This section details the procedure for replicating our variant effect quantification results.
+This section details the procedure for replicating our variant effect quantification results, including the pathogenic vs common variant analysis and the causal QTL analysis.
 
 ### Datasets
 
-The primary dataset for this task is located in `data_processed/pathogenic`. This experiment also requires the hg38 reference genome fasta file, which we provide in `data_processed/TAD/hg38.ml.fa`.
+The primary datasets for this task are located in `data_processed/pathogenic` and `data_processed/causal`. This experiment also requires the hg38 reference genome fasta file, which we provide in `data_processed/TAD/hg38.ml.fa`.
 
 ### Experimental Pipeline
 
-1.  First, generate the required DNA sequences (i.e. with reference vs. alternate alleles) for the foundation models by running the `pathogenic_generate.py` script.
+1.  First, navigate to the `analysis` directory, generate the required DNA sequences (i.e. with reference vs. alternate alleles) for the foundation models by running the `pathogenic_generate.py` script or `causal_generate.py`.
 
-2.  Navigate to the `job_scripts` directory. For each foundation model, run the corresponding script to generate embeddings, calculate the distance metric between variant pairs, and store the results.
+2.  Navigate to the `job_scripts` directory. For each foundation model, run the corresponding script to generate embeddings and calculate the distance metric between reference vs. alternate alleles. For example,
     ```bash
     python patho_[model_short_name].py
     ```
-    The results for each model will be saved to a corresponding directory, for example: `results_final/[model_short_name]_meanpool/`.
-
-3.  To organize the results from all models and replicate our plots, navigate to the `analysis` directory and run:
+    or
     ```bash
-    python patho_summary.py
+    python causal_[model_short_name].py
+    ```
+    The outputs for each model will be saved to the `data_processed/pathogenic` or `data_processed/causal` with proper naming for later use.
+
+3.  Navigate back to the `analysis` directory and run classification scripts to calculate the AUC and Cohen's d, measuring how good foundation models can generate embeddings to represent the distance between reference vs alternate alleles.
+    ```bash
+    python patho_classification.py
+    ```
+    or
+    ```bash
+    python causal_classification.py
     ```
 
 ## 5. TAD Region Recognition
