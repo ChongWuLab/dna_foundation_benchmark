@@ -2,7 +2,7 @@
 ## Introduction
 This repository is for generating the results of DNA foundation models benchmarking.
 
-Please cite the following manuscript for using DNAm models built and association results by our work:  
+Please cite the following manuscript for association results by our work:  
 
 
 > Feng, H. et al. Benchmarking DNA foundation models for genomic and genetic tasks. Nat Commun 16, 10780 (2025).
