@@ -5,7 +5,7 @@ This repository is for generating the results of DNA foundation models benchmark
 Please cite the following manuscript for using DNAm models built and association results by our work:  
 
 
-> Feng, Haonan, Lang Wu, Bingxin Zhao, Chad Huff, Jianjun Zhang, Jia Wu, Lifeng Lin, Peng Wei, and Chong Wu. "[Benchmarking DNA Foundation Models for Genomic and Genetic Tasks]([https://www.biorxiv.org/content/10.1101/2024.08.16.608288v1)." bioRxiv (2024): 2024-08.
+> Feng, H. et al. Benchmarking DNA foundation models for genomic and genetic tasks. Nat Commun 16, 10780 (2025).
 
 <p align="center">
   <img src="https://github.com/ChongWuLab/dna_foundation_benchmark/blob/main/Fig1.png" width=50% height=50%>
