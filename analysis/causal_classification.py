@@ -29,8 +29,8 @@ def get_hyperparameter_grid(model_name: str) -> dict:
 
 def load_and_prepare_data(model_name: str, folder_name: str) -> tuple:
     print(f"\nLoading data for model '{model_name}' from folder '{folder_name}'...")
-    pos_file = f"/rsrch4/home/biostatistics/hfeng3/review_datasets/data_processed/causal/{folder_name}/{model_name}_differences_pos.csv"
-    neg_file = f"/rsrch4/home/biostatistics/hfeng3/review_datasets/data_processed/causal/{folder_name}/{model_name}_differences_neg.csv"
+    pos_file = f"../data_processed/causal/{folder_name}/{model_name}_differences_pos.csv"
+    neg_file = f"../data_processed/causal/{folder_name}/{model_name}_differences_neg.csv"
     df_pos = pd.read_csv(pos_file)
     df_neg = pd.read_csv(neg_file)
     df_pos['label'] = 1
