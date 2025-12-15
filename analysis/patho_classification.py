@@ -29,8 +29,8 @@ def get_hyperparameter_grid(model_name: str) -> dict:
 
 def load_and_prepare_data(model_name: str) -> tuple:
     print(f"Loading data for model '{model_name}'...")
-    pos_file = f"/rsrch4/home/biostatistics/hfeng3/review_datasets/data_processed/pathogenic/{model_name}_differences_pathogenic.csv"
-    neg_file = f"/rsrch4/home/biostatistics/hfeng3/review_datasets/data_processed/pathogenic/{model_name}_differences_common.csv"
+    pos_file = f"../data_processed/pathogenic/{model_name}_differences_pathogenic.csv"
+    neg_file = f"../data_processed/pathogenic/{model_name}_differences_common.csv"
     df_pos = pd.read_csv(pos_file, header=None)
     df_neg = pd.read_csv(neg_file, header=None)
     df_pos['label'] = 1
@@ -156,7 +156,7 @@ for scenario_idx, scenario in enumerate(test_scenarios):
     all_results.append(result_row)
 
 results_df = pd.DataFrame(all_results)
-output_file = f"/rsrch4/home/biostatistics/hfeng3/review_datasets/results_final/patho_results/{args.model}.csv"
+output_file = f"../results_final/patho_results/{args.model}.csv"
 results_df.to_csv(output_file, index=False)
 
 print("FINAL RESULTS SUMMARY")
